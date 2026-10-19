@@ -40,7 +40,15 @@ object ShizukuHelper {
     suspend fun executeCommand(command: String): String = withContext(Dispatchers.IO) {
         if (!hasShizukuPermission()) return@withContext "Shizuku not granted"
         try {
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+            // Shizuku.newProcess via reflection to maintain binary compatibility across Shizuku versions
+            val method = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            method.isAccessible = true
+            val process = method.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val output = StringBuilder()
             var line: String?
