@@ -134,12 +134,18 @@ fun MainAppScreen(
                             fontSize = 18.sp
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "OFFLINE",
-                            color = Color(0xFF81C784),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Surface(
+                            color = Color(0xFF2E7D32),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "v1.0.1",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 },
                 actions = {
