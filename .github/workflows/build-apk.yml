@@ -1,0 +1,56 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Restore or Generate Persistent Keystore
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORED_KEYSTORE: ${{ vars.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$STORED_KEYSTORE" ]; then
+            echo "Restoring persistent debug.keystore from repository variable..."
+            echo "$STORED_KEYSTORE" | base64 -d > debug.keystore
+          else
+            echo "Generating new permanent debug.keystore..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=CiroCleaner, OU=Ciro, O=CiroCleaner, L=Jakarta, ST=Jakarta, C=ID"
+            
+            # Save keystore base64 to repository variable so all future builds use the EXACT same key
+            KS_B64=$(base64 -w 0 debug.keystore)
+            curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/actions/variables \
+              -d "{\"name\":\"DEBUG_KEYSTORE_BASE64\",\"value\":\"$KS_B64\"}" || true
+          fi
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --stacktrace --info
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CiroCleaner-Debug-APK
+          path: app/build/outputs/apk/debug/*.apk
