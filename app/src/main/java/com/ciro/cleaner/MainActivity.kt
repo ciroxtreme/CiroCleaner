@@ -139,7 +139,7 @@ fun MainAppScreen(
                             shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
                         ) {
                             Text(
-                                text = "v1.0.2",
+                                text = "v1.0.3",
                                 color = Color.White,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,

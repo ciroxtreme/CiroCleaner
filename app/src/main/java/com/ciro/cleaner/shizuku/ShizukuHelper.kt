@@ -72,12 +72,35 @@ object ShizukuHelper {
         !result.startsWith("Error")
     }
 
-    suspend fun findLargeFilesAdb(minMegabytes: Long): List<String> = withContext(Dispatchers.IO) {
-        val output = executeCommand("find /sdcard -type f -size +${minMegabytes}M 2>/dev/null")
-        if (output.startsWith("Error") || output.isBlank()) {
+    suspend fun findLargeFilesAdb(
+        minMegabytes: Long,
+        onFileFound: ((String) -> Unit)? = null
+    ): List<String> = withContext(Dispatchers.IO) {
+        if (!hasShizukuPermission()) return@withContext emptyList()
+        try {
+            val method = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            method.isAccessible = true
+            val command = "find /sdcard -type f -size +${minMegabytes}M 2>/dev/null"
+            val process = method.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            val list = mutableListOf<String>()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val path = line?.trim() ?: continue
+                if (path.isNotBlank() && !path.startsWith("Error")) {
+                    list.add(path)
+                    onFileFound?.invoke(path)
+                }
+            }
+            process.waitFor()
+            list
+        } catch (_: Exception) {
             emptyList()
-        } else {
-            output.lines().map { it.trim() }.filter { it.isNotBlank() }
         }
     }
 }

@@ -41,32 +41,41 @@ fun AppsTab() {
     var appsList by remember { mutableStateOf<List<AppStorageItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var hasPermission by remember { mutableStateOf(true) }
+    var scanProgress by remember { mutableFloatStateOf(0f) }
+    var currentScannedApp by remember { mutableStateOf("") }
+    var totalAppsCount by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
     fun loadAppsStorage() {
         scope.launch {
             isLoading = true
+            scanProgress = 0f
+            currentScannedApp = "Mempersiapkan daftar aplikasi..."
             appsList = withContext(Dispatchers.IO) {
                 val pm = context.packageManager
                 val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
                 val userApps = installed.filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName.contains("transsion") }
+                totalAppsCount = userApps.size
                 val results = mutableListOf<AppStorageItem>()
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try {
                         val storageStatsManager = context.getSystemService(Context.STORAGE_STATS_SERVICE) as StorageStatsManager
-                        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
                         val uuid = StorageManager.UUID_DEFAULT
 
-                        for (app in userApps) {
+                        for ((index, app) in userApps.withIndex()) {
+                            val appLabel = pm.getApplicationLabel(app).toString()
+                            withContext(Dispatchers.Main) {
+                                currentScannedApp = appLabel
+                                scanProgress = if (userApps.isNotEmpty()) (index + 1).toFloat() / userApps.size else 0f
+                            }
                             try {
                                 val stats = storageStatsManager.queryStatsForPackage(uuid, app.packageName, Process.myUserHandle())
-                                val appName = pm.getApplicationLabel(app).toString()
                                 val icon = try { pm.getApplicationIcon(app) } catch (_: Exception) { null }
                                 results.add(
                                     AppStorageItem(
                                         packageName = app.packageName,
-                                        appName = appName,
+                                        appName = appLabel,
                                         appIcon = icon,
                                         totalSizeBytes = stats.appBytes + stats.dataBytes,
                                         appSizeBytes = stats.appBytes,
@@ -116,7 +125,7 @@ fun AppsTab() {
                             fontSize = 18.sp
                         )
                         Text(
-                            text = "Lacak aplikasi yang datanya membengkak",
+                            text = if (totalAppsCount > 0) "Total: $totalAppsCount aplikasi terlacak" else "Lacak aplikasi yang datanya membengkak",
                             color = Color.Gray,
                             fontSize = 12.sp
                         )
@@ -146,10 +155,42 @@ fun AppsTab() {
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color(0xFF64B5F6))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Menghitung data aplikasi...", color = Color.Gray)
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(24.dp).fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "${(scanProgress * 100).toInt()}%",
+                            color = Color(0xFF64B5F6),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 32.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LinearProgressIndicator(
+                            progress = { scanProgress },
+                            modifier = Modifier.fillMaxWidth().height(8.dp),
+                            color = Color(0xFF64B5F6),
+                            trackColor = Color(0xFF2C2C3E)
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = currentScannedApp,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "Menghitung ukuran data & cache aplikasi...",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
         } else {

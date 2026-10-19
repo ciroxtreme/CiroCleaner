@@ -33,6 +33,9 @@ fun JunkTab(
     var junkItems by remember { mutableStateOf<List<JunkItem>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     var sortByLargest by remember { mutableStateOf(true) }
+    var scanProgress by remember { mutableFloatStateOf(0f) }
+    var currentScannedFolder by remember { mutableStateOf("") }
+    var junkFoundCount by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
     val totalSelectedBytes = junkItems.filter { it.isSelected }.sumOf { it.sizeBytes }
@@ -40,11 +43,35 @@ fun JunkTab(
     fun scanJunk() {
         scope.launch {
             isScanning = true
+            scanProgress = 0f
+            currentScannedFolder = "Memulai pemindaian berkas sampah..."
+            junkFoundCount = 0
             junkItems = withContext(Dispatchers.IO) {
                 val results = mutableListOf<JunkItem>()
                 val rootStorage = File("/sdcard")
                 if (rootStorage.exists()) {
-                    scanDirectoryForJunk(rootStorage, results)
+                    val subDirs = rootStorage.listFiles()?.filter { it.canRead() } ?: emptyList()
+                    val total = subDirs.size.coerceAtLeast(1)
+                    for ((idx, sub) in subDirs.withIndex()) {
+                        withContext(Dispatchers.Main) {
+                            currentScannedFolder = sub.name
+                            scanProgress = (idx.toFloat() / total)
+                        }
+                        if (sub.isDirectory) {
+                            scanDirectoryForJunk(sub, results) { item ->
+                                scope.launch(Dispatchers.Main) {
+                                    junkFoundCount = results.size
+                                    currentScannedFolder = item.name
+                                }
+                            }
+                        } else {
+                            checkAndAddJunkFile(sub, results)
+                        }
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    scanProgress = 1f
+                    currentScannedFolder = "Selesai"
                 }
                 if (sortByLargest) results.sortedByDescending { it.sizeBytes } else results
             }
@@ -193,10 +220,42 @@ fun JunkTab(
 
             if (isScanning) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = Color(0xFF64B5F6))
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Memindai berkas sampah...", color = Color.Gray)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.padding(24.dp).fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "${(scanProgress * 100).toInt()}%",
+                                color = Color(0xFF64B5F6),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 32.sp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                progress = { scanProgress },
+                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                                color = Color(0xFF64B5F6),
+                                trackColor = Color(0xFF2C2C3E)
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Text(
+                                text = currentScannedFolder,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = if (junkFoundCount > 0) "Ditemukan $junkFoundCount berkas sampah..." else "Memeriksa berkas sampah...",
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
                 }
             } else if (junkItems.isEmpty()) {
@@ -291,19 +350,24 @@ fun JunkRow(
     }
 }
 
-private fun scanDirectoryForJunk(dir: File, results: MutableList<JunkItem>, depth: Int = 0) {
+private fun scanDirectoryForJunk(
+    dir: File,
+    results: MutableList<JunkItem>,
+    depth: Int = 0,
+    onJunkFound: ((JunkItem) -> Unit)? = null
+) {
     if (depth > 6 || !dir.canRead()) return
     val files = dir.listFiles() ?: return
 
     if (files.isEmpty() && dir.name != "0" && dir.name != "sdcard") {
-        results.add(
-            JunkItem(
-                file = dir,
-                name = dir.name,
-                sizeBytes = 0,
-                category = JunkCategory.EMPTY_FOLDER
-            )
+        val emptyItem = JunkItem(
+            file = dir,
+            name = dir.name,
+            sizeBytes = 0,
+            category = JunkCategory.EMPTY_FOLDER
         )
+        results.add(emptyItem)
+        onJunkFound?.invoke(emptyItem)
         return
     }
 
@@ -312,24 +376,39 @@ private fun scanDirectoryForJunk(dir: File, results: MutableList<JunkItem>, dept
             if (f.name.equals(".thumbnails", ignoreCase = true)) {
                 val size = FileUtils.getDirectorySize(f)
                 if (size > 0) {
-                    results.add(JunkItem(f, f.name, size, JunkCategory.THUMBNAILS))
+                    val item = JunkItem(f, f.name, size, JunkCategory.THUMBNAILS)
+                    results.add(item)
+                    onJunkFound?.invoke(item)
                 }
             } else if (!f.name.startsWith(".")) {
-                scanDirectoryForJunk(f, results, depth + 1)
+                scanDirectoryForJunk(f, results, depth + 1, onJunkFound)
             }
         } else {
-            val name = f.name.lowercase()
-            val size = f.length()
-            if (size <= 0) continue
-
-            when {
-                name.endsWith(".apk") -> {
-                    results.add(JunkItem(f, f.name, size, JunkCategory.APK))
-                }
-                name.endsWith(".tmp") || name.endsWith(".log") || name.endsWith(".bak") || name.endsWith(".cache") -> {
-                    results.add(JunkItem(f, f.name, size, JunkCategory.TEMP_LOG))
-                }
-            }
+            checkAndAddJunkFile(f, results, onJunkFound)
         }
     }
 }
+
+private fun checkAndAddJunkFile(
+    file: File,
+    results: MutableList<JunkItem>,
+    onJunkFound: ((JunkItem) -> Unit)? = null
+) {
+    val name = file.name.lowercase()
+    val size = file.length()
+    if (size <= 0) return
+
+    val item = when {
+        name.endsWith(".apk") -> JunkItem(file, file.name, size, JunkCategory.APK)
+        name.endsWith(".tmp") || name.endsWith(".log") || name.endsWith(".bak") || name.endsWith(".cache") -> {
+            JunkItem(file, file.name, size, JunkCategory.TEMP_LOG)
+        }
+        else -> null
+    }
+
+    if (item != null) {
+        results.add(item)
+        onJunkFound?.invoke(item)
+    }
+}
+

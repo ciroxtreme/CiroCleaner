@@ -38,20 +38,36 @@ fun LargeFilesTab(
     var sizeThresholdMB by remember { mutableStateOf(100L) }
     var selectedCategory by remember { mutableStateOf(LargeFileType.ALL) }
     var showHiddenOnly by remember { mutableStateOf(false) }
+    var scanProgress by remember { mutableFloatStateOf(0f) }
+    var currentScanningPath by remember { mutableStateOf("") }
+    var foundCount by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
     fun scanFiles() {
         scope.launch {
             isScanning = true
+            scanProgress = 0f
+            currentScanningPath = "Mempersiapkan pemindaian..."
+            foundCount = 0
             largeFiles = withContext(Dispatchers.IO) {
                 val results = mutableListOf<LargeFileItem>()
                 val minBytes = sizeThresholdMB * 1024 * 1024
 
-                // 1. Jika Shizuku Aktif: Gunakan ADB `find` untuk menembus /sdcard/Android/obb dan folder tersembunyi
+                // 1. Jika Shizuku Aktif: Gunakan ADB `find` dengan streaming update progress
                 if (isShizukuActive) {
                     try {
-                        val filePaths = ShizukuHelper.findLargeFilesAdb(sizeThresholdMB)
-                        for (path in filePaths) {
+                        withContext(Dispatchers.Main) {
+                            currentScanningPath = "Memindai seluruh penyimpanan via Shizuku..."
+                            scanProgress = 0.15f
+                        }
+                        val filePaths = ShizukuHelper.findLargeFilesAdb(sizeThresholdMB) { foundPath ->
+                            scope.launch(Dispatchers.Main) {
+                                currentScanningPath = File(foundPath).name
+                                foundCount++
+                            }
+                        }
+                        val totalFound = filePaths.size
+                        for ((idx, path) in filePaths.withIndex()) {
                             val f = File(path)
                             if (f.exists() && f.isFile) {
                                 val len = f.length()
@@ -70,16 +86,55 @@ fun LargeFilesTab(
                                     )
                                 }
                             }
+                            if (totalFound > 0) {
+                                withContext(Dispatchers.Main) {
+                                    scanProgress = 0.2f + (0.8f * (idx + 1) / totalFound)
+                                    currentScanningPath = f.name
+                                }
+                            }
                         }
                     } catch (_: Exception) {}
                 }
 
-                // 2. Fallback / Tambahan: Scan recursive standard Java File API
+                // 2. Fallback / Standar: Scan folder-folder utama /sdcard
                 if (results.isEmpty()) {
                     val root = File("/sdcard")
                     if (root.exists()) {
-                        scanForLargeFiles(root, results, minBytes)
+                        val subDirs = root.listFiles()?.filter { it.canRead() } ?: emptyList()
+                        val totalDirs = subDirs.size.coerceAtLeast(1)
+                        for ((idx, sub) in subDirs.withIndex()) {
+                            withContext(Dispatchers.Main) {
+                                currentScanningPath = sub.name
+                                scanProgress = (idx.toFloat() / totalDirs)
+                            }
+                            if (sub.isDirectory) {
+                                scanForLargeFiles(sub, results, minBytes) { name ->
+                                    scope.launch(Dispatchers.Main) {
+                                        currentScanningPath = name
+                                        foundCount = results.size
+                                    }
+                                }
+                            } else if (sub.length() >= minBytes) {
+                                val isHidden = sub.name.startsWith(".")
+                                val ext = sub.extension
+                                results.add(
+                                    LargeFileItem(
+                                        file = sub,
+                                        name = sub.name,
+                                        sizeBytes = sub.length(),
+                                        isHidden = isHidden,
+                                        extension = ext,
+                                        fileType = categorizeFileType(ext, sub.absolutePath)
+                                    )
+                                )
+                            }
+                        }
                     }
+                }
+
+                withContext(Dispatchers.Main) {
+                    scanProgress = 1f
+                    currentScanningPath = "Selesai"
                 }
 
                 // Deduplikasi berdasarkan path absolut & urutkan terbesar
@@ -196,13 +251,42 @@ fun LargeFilesTab(
 
         if (isScanning) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color(0xFF00897B))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = if (isShizukuActive) "Mencari berkas raksasa via Shizuku ADB..." else "Memindai berkas besar...",
-                        color = Color.Gray
-                    )
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(24.dp).fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "${(scanProgress * 100).toInt()}%",
+                            color = Color(0xFF00897B),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 32.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LinearProgressIndicator(
+                            progress = { scanProgress },
+                            modifier = Modifier.fillMaxWidth().height(8.dp),
+                            color = Color(0xFF00897B),
+                            trackColor = Color(0xFF2C2C3E)
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = currentScanningPath,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = if (foundCount > 0) "Ditemukan $foundCount berkas besar..." else "Memindai direktori penyimpanan...",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
         } else if (filteredList.isEmpty()) {
@@ -355,13 +439,19 @@ private fun categorizeFileType(extension: String, path: String): LargeFileType {
     }
 }
 
-private fun scanForLargeFiles(dir: File, results: MutableList<LargeFileItem>, minBytes: Long, depth: Int = 0) {
+private fun scanForLargeFiles(
+    dir: File,
+    results: MutableList<LargeFileItem>,
+    minBytes: Long,
+    depth: Int = 0,
+    onFileScanned: ((String) -> Unit)? = null
+) {
     if (depth > 8 || !dir.canRead()) return
     val files = dir.listFiles() ?: return
 
     for (f in files) {
         if (f.isDirectory) {
-            scanForLargeFiles(f, results, minBytes, depth + 1)
+            scanForLargeFiles(f, results, minBytes, depth + 1, onFileScanned)
         } else {
             val length = f.length()
             if (length >= minBytes) {
@@ -377,6 +467,7 @@ private fun scanForLargeFiles(dir: File, results: MutableList<LargeFileItem>, mi
                         fileType = categorizeFileType(ext, f.absolutePath)
                     )
                 )
+                onFileScanned?.invoke(f.name)
             }
         }
     }
