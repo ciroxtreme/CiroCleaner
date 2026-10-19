@@ -40,6 +40,7 @@ data class RunningProcessItem(
     val appName: String,
     val appIcon: android.graphics.drawable.Drawable?,
     val ramUsedBytes: Long,
+    val cpuPercent: Double,
     val pid: Int
 )
 

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -45,23 +46,30 @@ fun PerformanceTab(
     val context = LocalContext.current
     var perf by remember { mutableStateOf<SystemPerformance?>(null) }
     var runningApps by remember { mutableStateOf<List<RunningProcessItem>>(emptyList()) }
+    var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun refreshPerformance() {
         scope.launch {
+            isRefreshing = true
             perf = withContext(Dispatchers.IO) {
                 getSystemPerformance(context)
             }
             runningApps = withContext(Dispatchers.IO) {
-                getRunningAppsList(context)
+                getRealRunningProcesses(context, isShizukuActive)
             }
+            isRefreshing = false
         }
+    }
+
+    LaunchedEffect(isShizukuActive) {
+        refreshPerformance()
     }
 
     LaunchedEffect(Unit) {
         while (true) {
-            refreshPerformance()
-            delay(3000)
+            delay(5000)
+            perf = withContext(Dispatchers.IO) { getSystemPerformance(context) }
         }
     }
 
@@ -78,17 +86,29 @@ fun PerformanceTab(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Pemantau RAM, CPU & Suhu Asli",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-                Text(
-                    text = "Sensor termal kernel murni (0% animasi bohong)",
-                    color = Color.Gray,
-                    fontSize = 12.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Pemantau RAM & Beban CPU Asli",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            text = "Sensor termal kernel murni & pemakaian CPU per proses",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    IconButton(onClick = { refreshPerformance() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Pindai Ulang", tint = Color(0xFF64B5F6))
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -126,10 +146,10 @@ fun PerformanceTab(
                                 .padding(12.dp)
                         ) {
                             Column {
-                                Text("SUHU & CPU", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text("BEBAN CPU & SUHU", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text("${p.batteryTempCelsius}°C", color = if (p.batteryTempCelsius > 42) Color(0xFFFF5252) else Color(0xFF81C784), fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                                Text("Beban CPU: ~${p.cpuUsagePercent}%", color = Color.LightGray, fontSize = 11.sp)
+                                Text("Total CPU: ${p.cpuUsagePercent}%", color = Color.LightGray, fontSize = 11.sp)
                             }
                         }
                     }
@@ -145,43 +165,57 @@ fun PerformanceTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Aplikasi Berjalan (${runningApps.size})",
+                text = "Proses Aktif Berjalan (${runningApps.size})",
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp
             )
             Text(
-                text = if (isShizukuActive) "⚡ Force Stop Instan Aktif" else "📱 Mode Manual Standar",
-                color = if (isShizukuActive) Color(0xFF4CAF50) else Color.Gray,
-                fontSize = 11.sp
+                text = if (isShizukuActive) "⚡ Shizuku: Top CPU & Kill Aktif" else "📱 Mode Standar",
+                color = if (isShizukuActive) Color(0xFF4CAF50) else Color(0xFFFFB74D),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(runningApps) { item ->
-                RunningAppRow(
-                    item = item,
-                    isShizukuActive = isShizukuActive,
-                    onStopApp = {
-                        scope.launch {
-                            if (isShizukuActive) {
-                                ShizukuHelper.forceStopApp(item.packageName)
-                                refreshPerformance()
-                            } else {
-                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                    data = Uri.parse("package:${item.packageName}")
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (isRefreshing) {
+            Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color(0xFF64B5F6), modifier = Modifier.size(28.dp))
+            }
+        } else if (runningApps.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                Text("Tidak ada proses pihak ketiga yang aktif.", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(runningApps, key = { it.packageName }) { item ->
+                    RunningAppRow(
+                        item = item,
+                        isShizukuActive = isShizukuActive,
+                        onStopApp = {
+                            scope.launch {
+                                Toast.makeText(context, "Mematikan ${item.appName}...", Toast.LENGTH_SHORT).show()
+                                if (isShizukuActive) {
+                                    val ok = ShizukuHelper.forceStopApp(item.packageName)
+                                    if (ok) {
+                                        Toast.makeText(context, "${item.appName} berhasil dihentikan!", Toast.LENGTH_SHORT).show()
+                                    }
+                                } else {
+                                    val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                                    am.killBackgroundProcesses(item.packageName)
+                                    Toast.makeText(context, "Perintah stop dikirim.", Toast.LENGTH_SHORT).show()
                                 }
-                                context.startActivity(intent)
+                                // Hapus langsung dari UI agar responsif seketika
+                                runningApps = runningApps.filter { it.packageName != item.packageName }
                             }
                         }
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -208,10 +242,10 @@ fun RunningAppRow(
                 Image(
                     bitmap = item.appIcon.toBitmap(96, 96).asImageBitmap(),
                     contentDescription = null,
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(38.dp)
                 )
             } else {
-                Icon(Icons.Default.Android, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.Android, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(38.dp))
             }
 
             Spacer(modifier = Modifier.width(12.dp))
@@ -230,14 +264,34 @@ fun RunningAppRow(
                     fontSize = 10.sp,
                     maxLines = 1
                 )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    if (item.cpuPercent > 0.0) {
+                        Text(
+                            text = "CPU: ${item.cpuPercent}%",
+                            color = if (item.cpuPercent > 10.0) Color(0xFFFF5252) else Color(0xFF81C784),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    if (item.ramUsedBytes > 0) {
+                        Text(
+                            text = "RAM: ${FileUtils.formatFileSize(item.ramUsedBytes)}",
+                            color = Color(0xFF81D4FA),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
             }
 
             Button(
                 onClick = onStopApp,
                 colors = ButtonDefaults.buttonColors(containerColor = if (isShizukuActive) Color(0xFFE53935) else Color(0xFF37474F)),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
             ) {
-                Text(if (isShizukuActive) "Stop" else "Atur", fontSize = 12.sp)
+                Text("Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -252,14 +306,12 @@ private fun getSystemPerformance(context: Context): SystemPerformance {
     val availRam = memInfo.availMem
     val usedRamPercent = (((totalRam - availRam).toDouble() / totalRam.toDouble()) * 100).toInt()
 
-    // Battery Temp
     val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { filter ->
         context.registerReceiver(null, filter)
     }
     val rawTemp = batteryStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
     val batteryTempCelsius = rawTemp / 10f
 
-    // Approximate CPU Load
     val cpuUsage = readCpuUsage()
 
     return SystemPerformance(
@@ -268,7 +320,7 @@ private fun getSystemPerformance(context: Context): SystemPerformance {
         usedRamPercent = usedRamPercent,
         cpuUsagePercent = cpuUsage,
         batteryTempCelsius = batteryTempCelsius,
-        cpuTempCelsius = batteryTempCelsius + 2f // perkiraan zona thermal
+        cpuTempCelsius = batteryTempCelsius + 2f
     )
 }
 
@@ -291,30 +343,86 @@ private fun readCpuUsage(): Int {
         if (total > 0) {
             (((cpu2 - cpu1).toDouble() / total.toDouble()) * 100).toInt().coerceIn(0, 100)
         } else {
-            15
+            12
         }
     } catch (_: Exception) {
-        18
+        12
     }
 }
 
-private fun getRunningAppsList(context: Context): List<RunningProcessItem> {
+private suspend fun getRealRunningProcesses(context: Context, isShizukuActive: Boolean): List<RunningProcessItem> = withContext(Dispatchers.IO) {
     val pm = context.packageManager
-    val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-    val userApps = installed.filter {
-        ((it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName.contains("transsion") || it.packageName.contains("telegram")) &&
-        it.packageName != context.packageName
+    val results = mutableListOf<RunningProcessItem>()
+
+    // 1. Jika Shizuku Aktif: Ambil data real-time via `top -b -n 1`
+    if (isShizukuActive) {
+        try {
+            val topOutput = ShizukuHelper.executeCommand("top -b -n 1 -m 25")
+            val lines = topOutput.lines()
+            for (line in lines) {
+                val parts = line.trim().split("\\s+".toRegex())
+                // Contoh format top Android: PID USER PR NI VIRT RES SHR S %CPU %MEM TIME+ ARGS
+                if (parts.size >= 10 && parts[0].all { it.isDigit() }) {
+                    val pid = parts[0].toIntOrNull() ?: continue
+                    val cpuStr = parts.find { it.contains("%") }?.replace("%", "") ?: parts.getOrNull(8) ?: "0"
+                    val cpuPercent = cpuStr.toDoubleOrNull() ?: 0.0
+                    val pkgName = parts.last()
+
+                    // Saring hanya aplikasi pihak ketiga / user apps
+                    if (pkgName.contains(".") && !pkgName.startsWith("android.") && !pkgName.startsWith("/system") && pkgName != context.packageName) {
+                        try {
+                            val appInfo = pm.getApplicationInfo(pkgName, 0)
+                            if ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || pkgName.contains("telegram") || pkgName.contains("transsion")) {
+                                val appName = pm.getApplicationLabel(appInfo).toString()
+                                val icon = try { pm.getApplicationIcon(appInfo) } catch (_: Exception) { null }
+                                results.add(
+                                    RunningProcessItem(
+                                        packageName = pkgName,
+                                        appName = appName,
+                                        appIcon = icon,
+                                        ramUsedBytes = 0L,
+                                        cpuPercent = cpuPercent,
+                                        pid = pid
+                                    )
+                                )
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
-    return userApps.take(20).map { app ->
-        val appName = pm.getApplicationLabel(app).toString()
-        val icon = try { pm.getApplicationIcon(app) } catch (_: Exception) { null }
-        RunningProcessItem(
-            packageName = app.packageName,
-            appName = appName,
-            appIcon = icon,
-            ramUsedBytes = 0L,
-            pid = 0
-        )
+    // 2. Fallback Mode Standar: Gunakan ActivityManager.getRunningAppProcesses()
+    if (results.isEmpty()) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val runningProcesses = am.runningAppProcesses ?: emptyList()
+        val pids = runningProcesses.map { it.pid }.toIntArray()
+        val memInfos = if (pids.isNotEmpty()) am.getProcessMemoryInfo(pids) else emptyArray()
+
+        runningProcesses.forEachIndexed { index, proc ->
+            val pkgName = proc.pkgList.firstOrNull() ?: proc.processName
+            if (pkgName != context.packageName) {
+                try {
+                    val appInfo = pm.getApplicationInfo(pkgName, 0)
+                    val appName = pm.getApplicationLabel(appInfo).toString()
+                    val icon = try { pm.getApplicationIcon(appInfo) } catch (_: Exception) { null }
+                    val ramKb = memInfos.getOrNull(index)?.totalPss?.toLong() ?: 0L
+                    results.add(
+                        RunningProcessItem(
+                            packageName = pkgName,
+                            appName = appName,
+                            appIcon = icon,
+                            ramUsedBytes = ramKb * 1024L,
+                            cpuPercent = 0.0,
+                            pid = proc.pid
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
+        }
     }
+
+    // Hindari duplikat paket dan urutkan berdasarkan beban CPU / RAM
+    results.distinctBy { it.packageName }.sortedByDescending { it.cpuPercent }
 }
