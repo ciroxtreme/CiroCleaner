@@ -17,12 +17,21 @@ data class JunkItem(
     val isSelected: Boolean = true
 )
 
+enum class LargeFileType(val displayName: String) {
+    ALL("Semua"),
+    OBB_GAME("🎮 Game & OBB"),
+    ARCHIVE("📦 Arsip & ZIP"),
+    VIDEO("🎬 Video & Film"),
+    DOCUMENT_OTHER("📄 Dokumen & Lainnya")
+}
+
 data class LargeFileItem(
     val file: File,
     val name: String,
     val sizeBytes: Long,
     val isHidden: Boolean,
-    val extension: String
+    val extension: String,
+    val fileType: LargeFileType
 )
 
 data class AppStorageItem(

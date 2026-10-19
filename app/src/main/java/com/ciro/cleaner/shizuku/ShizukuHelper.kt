@@ -71,4 +71,13 @@ object ShizukuHelper {
         val result = executeCommand("pm trim-caches 1000G")
         !result.startsWith("Error")
     }
+
+    suspend fun findLargeFilesAdb(minMegabytes: Long): List<String> = withContext(Dispatchers.IO) {
+        val output = executeCommand("find /sdcard -type f -size +${minMegabytes}M 2>/dev/null")
+        if (output.startsWith("Error") || output.isBlank()) {
+            emptyList()
+        } else {
+            output.lines().map { it.trim() }.filter { it.isNotBlank() }
+        }
+    }
 }

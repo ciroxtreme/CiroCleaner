@@ -139,7 +139,7 @@ fun MainAppScreen(
                             shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
                         ) {
                             Text(
-                                text = "v1.0.1",
+                                text = "v1.0.2",
                                 color = Color.White,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -228,7 +228,7 @@ fun MainAppScreen(
         ) {
             when (selectedTab) {
                 0 -> JunkTab(isShizukuActive = isShizukuActive, onClearInternalCacheShizuku = onClearInternalCaches)
-                1 -> LargeFilesTab()
+                1 -> LargeFilesTab(isShizukuActive = isShizukuActive)
                 2 -> AppsTab()
                 3 -> PerformanceTab(isShizukuActive = isShizukuActive)
             }
