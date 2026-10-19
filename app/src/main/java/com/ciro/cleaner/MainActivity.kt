@@ -28,7 +28,7 @@ import com.ciro.cleaner.ui.tabs.AppsTab
 import com.ciro.cleaner.ui.tabs.JunkTab
 import com.ciro.cleaner.ui.tabs.LargeFilesTab
 import com.ciro.cleaner.ui.tabs.PerformanceTab
-import dev.rikka.shizuku.Shizuku
+import rikka.shizuku.Shizuku
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
